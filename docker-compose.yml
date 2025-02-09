@@ -1,0 +1,98 @@
+# version: '3.8'
+---
+services:
+  backend:
+    networks:
+      - music-maestro-network
+    container_name: music-maestro-backend
+    build: ./backend
+    ports:
+      - "8025:8000"
+    depends_on:
+      - redis
+      - minio
+      - celery_worker
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    volumes:
+      - ./backend:/app
+      - ./spleeter/output:/spleeter/output
+
+  frontend:
+    networks:
+      - music-maestro-network
+    container_name: music-maestro-frontend
+    build: ./frontend
+    ports:
+      - "3025:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+
+  redis:
+    networks:
+      - music-maestro-network
+    container_name: music-maestro-redis
+    image: redis:latest
+    ports:
+      - "6379:6379"
+
+  minio:
+    networks:
+      - music-maestro-network
+    container_name: music-maestro-minio
+    image: minio/minio
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    ports:
+      - "9025:9000"
+      - "9026:9001"
+    volumes:
+      - minio_data:/data
+
+  celery_worker:
+    networks:
+      - music-maestro-network
+    container_name: music-maestro-celery-worker
+    build: ./backend
+    command: celery -A workers.celery_app worker --loglevel=info
+    depends_on:
+      - redis
+      - spleeter
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=minioadmin
+      - MINIO_SECRET_KEY=minioadmin
+    volumes:
+      - ./backend:/app
+      - ./spleeter/output:/spleeter/output
+
+  spleeter:
+    build: ./spleeter
+    networks:
+      music-maestro-network:
+        aliases:
+          - spleeter
+    container_name: music-maestro-spleeter
+    image: deezer/spleeter:3.6-5stems
+    volumes:
+      - ./spleeter/input:/input
+      - ./spleeter/output:/output
+      - ./spleeter/models:/model
+    environment:
+      - MODEL_PATH=/model
+
+volumes:
+  minio_data:
+
+networks:
+  music-maestro-network:
+    name: music-maestro-network
+    external: false

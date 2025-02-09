@@ -1,0 +1,15 @@
+{
+  "name": "music-maestro",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "jest"
+  },
+  "dependencies": {
+    "next": "latest",
+    "react": "latest",
+    "react-dom": "latest"
+  }
+}
