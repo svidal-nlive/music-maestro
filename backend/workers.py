@@ -1,4 +1,3 @@
-Download/Upload and trigger Spleeter Processing)
 import os
 import requests
 import boto3
