@@ -1,17 +1,23 @@
 import os
 import requests
 import boto3
+import redis
 from celery import Celery
 
-celery_app = Celery("backend.workers", broker="redis://redis:6379/0")
+celery_app = Celery(
+    "backend.workers",
+    broker="redis://redis:6379/0",
+    backend="redis://redis:6379/0"  # <-- Add this line
+)
+redis_client = redis.StrictRedis(host='redis', port=6379, db=0, decode_responses=True)
 
-# MinIO connection details (ensure these environment variables are set)
+# MinIO connection details
 MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 BUCKET_NAME = "music-maestro"
+SPLEETER_API_URL = "http://spleeter:8000/process/"
 
-# Configure the boto3 client
 s3_client = boto3.client(
     "s3",
     endpoint_url=MINIO_ENDPOINT,
@@ -20,42 +26,29 @@ s3_client = boto3.client(
     region_name="us-east-1",
 )
 
-# URL for the Spleeter API (using the container name as hostname and port)
-SPLEETER_API_URL = "http://spleeter:8000/process/"
-
 @celery_app.task()
 def process_audio(filename):
-    # Step 1: Download the original file from MinIO to a temporary local path.
+    task_id = process_audio.request.id
+    redis_client.set(f"task:{task_id}", "Downloading")
+
     local_temp_file = f"/tmp/{filename}"
     s3_client.download_file(BUCKET_NAME, filename, local_temp_file)
-    print(f"Downloaded {filename} to {local_temp_file}")
-
-    # Step 2: Call the Spleeter REST API to process the audio.
+    redis_client.set(f"task:{task_id}", "Processing")
+    
     with open(local_temp_file, "rb") as f:
         response = requests.post(SPLEETER_API_URL, files={"file": (filename, f)})
-    response.raise_for_status()  # Raise an error if the API call failed.
-    print(f"File {filename} processed by Spleeter API.")
+    response.raise_for_status()
+    redis_client.set(f"task:{task_id}", "Uploading")
 
-    # Step 3: Locate the processed stems.
-    # The Spleeter API writes output to the shared output directory at:
-    #    /spleeter/output/{base_filename}
     base_filename = filename.rsplit(".", 1)[0]
     processed_dir = f"/spleeter/output/{base_filename}"
-
-    # (Optional) You could add polling logic here if processing takes time.
-
-    # List of stems expected (adjust based on your Spleeter configuration)
     stems = ["vocals", "drums", "bass", "other", "piano"]
-
-    # Step 4: Upload each stem to MinIO.
+    
     for stem in stems:
         stem_file = os.path.join(processed_dir, f"{stem}.wav")
         if os.path.exists(stem_file):
             minio_stem_path = f"processed/{base_filename}_{stem}.wav"
             s3_client.upload_file(stem_file, BUCKET_NAME, minio_stem_path)
-            print(f"Uploaded {stem_file} to MinIO as {minio_stem_path}")
-        else:
-            # Log a warning if the expected stem file is missing.
-            print(f"Warning: Expected stem file {stem_file} not found.")
-
+    
+    redis_client.set(f"task:{task_id}", "Complete")
     return f"Processing and upload complete for {filename}"
